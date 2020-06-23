@@ -1,0 +1,3 @@
+#!/bin/bash
+
+cfy profile use 172.22.0.4 -u admin -p admin -t default_tenant --ssl -c ca.crt

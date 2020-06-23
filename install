@@ -1,0 +1,214 @@
+#!/bin/bash
+
+export CONTAINER_NAME=TEST_NAME_CONTAINER
+export MANAGER1_NAME=${CONTAINER_NAME}_1
+export MANAGER2_NAME=${CONTAINER_NAME}_2
+export DB1_NAME=${CONTAINER_NAME}_db1
+export DB2_NAME=${CONTAINER_NAME}_db2
+export DB3_NAME=${CONTAINER_NAME}_db3
+export QUEUE1_NAME=${CONTAINER_NAME}_queue_1
+export QUEUE2_NAME=${CONTAINER_NAME}_queue_2
+export MANAGER1_IP=172.22.0.3
+export MANAGER2_IP=172.22.0.4
+export DB1_IP=172.22.0.5
+export DB2_IP=172.22.0.6
+export DB3_IP=172.22.0.7
+export QUEUE1_IP=172.22.0.8
+export QUEUE2_IP=172.22.0.9
+
+docker network create --subnet=172.22.0.0/24 net1
+
+function generate_test_cert {
+    san=$1
+    docker run --rm  -v $(pwd):/root/.cloudify-test-ca cloudifyplatform/premium-cloudify-manager-worker  cfy_manager generate-test-cert -s $san
+}
+
+generate_test_cert $QUEUE1_IP
+mv $QUEUE1_IP.crt queue1_cert.pem
+mv $QUEUE1_IP.key queue1_key.pem
+
+generate_test_cert $QUEUE2_IP
+mv $QUEUE2_IP.crt queue2_cert.pem
+mv $QUEUE2_IP.key queue2_key.pem
+
+generate_test_cert $DB1_IP
+mv $DB1_IP.crt db1_cert.pem
+mv $DB1_IP.key db1_key.pem
+
+generate_test_cert $DB2_IP
+mv $DB2_IP.crt db2_cert.pem
+mv $DB2_IP.key db2_key.pem
+
+generate_test_cert $DB3_IP
+mv $DB3_IP.crt db3_cert.pem
+mv $DB3_IP.key db3_key.pem
+
+generate_test_cert $MANAGER1_IP
+mv $MANAGER1_IP.crt db_client_1_cert.pem
+mv $MANAGER1_IP.key db_client_1_key.pem
+
+generate_test_cert $MANAGER2_IP
+mv $MANAGER2_IP.crt db_client_2_cert.pem
+mv $MANAGER2_IP.key db_client_2_key.pem
+
+generate_test_cert $MANAGER1_IP
+mv $MANAGER1_IP.crt external_cert_1.pem
+mv $MANAGER1_IP.key external_key_1.pem
+
+generate_test_cert $MANAGER2_IP
+mv $MANAGER2_IP.crt external_cert_2.pem
+mv $MANAGER2_IP.key external_key_2.pem
+
+generate_test_cert $MANAGER1_IP
+mv $MANAGER1_IP.crt manager_1_cert.pem
+mv $MANAGER1_IP.key manager_1_key.pem
+
+set -eux
+sed -e "s/CONTAINER_IP/${QUEUE1_IP}/g" \
+  -e "s/QUEUE2_IP/${QUEUE2_IP}/" \
+  .circleci/cluster/queue1_config.yaml > queue1_config.yaml
+
+docker run \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:ro --tmpfs /run --tmpfs /run/lock -d \
+  --name ${QUEUE1_NAME} \
+  --network net1 --ip ${QUEUE1_IP} \
+  -v $(pwd)/queue1_config.yaml:/etc/cloudify/config.yaml \
+  -v $(pwd)/queue1_key.pem:/etc/cloudify/queue_key.pem \
+  -v $(pwd)/queue1_cert.pem:/etc/cloudify/queue_cert.pem \
+  -v $(pwd)/ca.crt:/etc/cloudify/ca.pem \
+  cloudifyplatform/premium-cloudify-rabbitmq
+
+docker exec ${QUEUE1_NAME} cfy_manager install
+
+sed -e "s/CONTAINER_IP/${QUEUE2_IP}/g" \
+  -e "s/QUEUE1_IP/${QUEUE1_IP}/" \
+  .circleci/cluster/queue2_config.yaml > queue2_config.yaml
+docker run \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:ro --tmpfs /run --tmpfs /run/lock -d \
+  --name ${QUEUE2_NAME} \
+  --network net1 --ip ${QUEUE2_IP} \
+  -v $(pwd)/queue2_config.yaml:/etc/cloudify/config.yaml \
+  -v $(pwd)/queue2_key.pem:/etc/cloudify/queue_key.pem \
+  -v $(pwd)/queue2_cert.pem:/etc/cloudify/queue_cert.pem \
+  -v $(pwd)/ca.crt:/etc/cloudify/ca.pem \
+  cloudifyplatform/premium-cloudify-rabbitmq
+
+docker exec ${QUEUE2_NAME} cfy_manager install
+
+sed -e "s/CONTAINER_IP/${DB1_IP}/g" \
+      -e "s/DB1_IP/${DB1_IP}/g" \
+      -e "s/DB2_IP/${DB2_IP}/g" \
+      -e "s/DB3_IP/${DB3_IP}/g" \
+      .circleci/cluster/db_config.yaml > db1_config.yaml
+
+docker run \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:ro --tmpfs /run --tmpfs /run/lock -d \
+  --name ${DB1_NAME} \
+  --network net1 --ip ${DB1_IP} \
+  -v $(pwd)/db1_config.yaml:/etc/cloudify/config.yaml \
+  -v $(pwd)/db1_key.pem:/etc/cloudify/key.pem \
+  -v $(pwd)/db1_cert.pem:/etc/cloudify/cert.pem \
+  -v $(pwd)/ca.crt:/etc/cloudify/ca.pem \
+  cloudifyplatform/premium-cloudify-postgresql
+
+docker exec ${DB1_NAME} cfy_manager install
+
+sed -e "s/CONTAINER_IP/${DB2_IP}/g" \
+      -e "s/DB1_IP/${DB1_IP}/g" \
+      -e "s/DB2_IP/${DB2_IP}/g" \
+      -e "s/DB3_IP/${DB3_IP}/g" \
+      .circleci/cluster/db_config.yaml > db2_config.yaml
+
+docker run \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:ro --tmpfs /run --tmpfs /run/lock -d \
+  --name ${DB2_NAME} \
+  --network net1 --ip ${DB2_IP} \
+  -v $(pwd)/db2_config.yaml:/etc/cloudify/config.yaml \
+  -v $(pwd)/db2_key.pem:/etc/cloudify/key.pem \
+  -v $(pwd)/db2_cert.pem:/etc/cloudify/cert.pem \
+  -v $(pwd)/ca.crt:/etc/cloudify/ca.pem \
+  cloudifyplatform/premium-cloudify-postgresql
+
+docker exec ${DB2_NAME} cfy_manager install
+
+sed -e "s/CONTAINER_IP/${DB3_IP}/g" \
+      -e "s/DB1_IP/${DB1_IP}/g" \
+      -e "s/DB2_IP/${DB2_IP}/g" \
+      -e "s/DB3_IP/${DB3_IP}/g" \
+      .circleci/cluster/db_config.yaml > db3_config.yaml
+
+docker run \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:ro --tmpfs /run --tmpfs /run/lock -d \
+  --name ${DB3_NAME} \
+  --network net1 --ip ${DB3_IP} \
+  -v $(pwd)/db3_config.yaml:/etc/cloudify/config.yaml \
+  -v $(pwd)/db3_key.pem:/etc/cloudify/key.pem \
+  -v $(pwd)/db3_cert.pem:/etc/cloudify/cert.pem \
+  -v $(pwd)/ca.crt:/etc/cloudify/ca.pem \
+  cloudifyplatform/premium-cloudify-postgresql
+docker exec ${DB3_NAME} cfy_manager install
+
+QUEUE1_NODE=$(docker exec ${QUEUE1_NAME} cfy_manager node get-id | grep -oE '[^ ]+$')
+QUEUE2_NODE=$(docker exec ${QUEUE2_NAME} cfy_manager node get-id | grep -oE '[^ ]+$')
+DB1_NODE=$(docker exec ${DB1_NAME} cfy_manager node get-id | grep -oE '[^ ]+$')
+DB2_NODE=$(docker exec ${DB2_NAME} cfy_manager node get-id | grep -oE '[^ ]+$')
+DB3_NODE=$(docker exec ${DB3_NAME} cfy_manager node get-id | grep -oE '[^ ]+$')
+
+export QUEUE1_NODE=${QUEUE1_NODE}
+export QUEUE2_NODE=${QUEUE2_NODE}
+export DB1_NODE=${DB1_NODE}
+export DB2_NODE=${DB2_NODE}
+export DB3_NODE=${DB3_NODE}
+
+sed -e "s/CONTAINER_IP/${MANAGER1_IP}/g" \
+  -e "s/QUEUE1_IP/${QUEUE1_IP}/g" \
+  -e "s/QUEUE2_IP/${QUEUE2_IP}/g" \
+  -e "s/DB1_IP/${DB1_IP}/g" \
+  -e "s/DB2_IP/${DB2_IP}/g" \
+  -e "s/DB3_IP/${DB3_IP}/g" \
+  -e "s/QUEUE1_NODE/${QUEUE1_NODE}/g" \
+  -e "s/QUEUE2_NODE/${QUEUE2_NODE}/g" \
+  -e "s/DB1_NODE/${DB1_NODE}/g" \
+  -e "s/DB2_NODE/${DB2_NODE}/g" \
+  -e "s/DB3_NODE/${DB3_NODE}/g" \
+  .circleci/cluster/manager1_config.yaml > manager1_config.yaml
+
+docker run \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:ro --tmpfs /run --tmpfs /run/lock -d \
+  --name ${MANAGER1_NAME} \
+  --network net1 --ip ${MANAGER1_IP} \
+  -v $(pwd)/manager1_config.yaml:/etc/cloudify/config.yaml \
+  -v $(pwd)/manager_1_key.pem:/etc/cloudify/key.pem \
+  -v $(pwd)/manager_1_cert.pem:/etc/cloudify/cert.pem \
+  -v $(pwd)/ca.crt:/etc/cloudify/ca.pem \
+  -v $(pwd)/external_cert_1.pem:/etc/cloudify/external_cert.pem \
+  -v $(pwd)/external_key_1.pem:/etc/cloudify/external_key.pem \
+  -v $(pwd)/db_client_1_key.pem:/etc/cloudify/postgres_client_key.pem \
+  -v $(pwd)/db_client_1_cert.pem:/etc/cloudify/postgres_client_cert.pem \
+  cloudifyplatform/premium-cloudify-manager-worker
+docker exec ${MANAGER1_NAME} cfy_manager install
+
+sed -e "s/CONTAINER_IP/${MANAGER2_IP}/g" \
+  -e "s/DB1_IP/${DB1_IP}/g" \
+  -e "s/DB2_IP/${DB2_IP}/g" \
+  -e "s/DB3_IP/${DB3_IP}/g" \
+  -e "s/DB1_NODE/${DB1_NODE}/g" \
+  -e "s/DB2_NODE/${DB2_NODE}/g" \
+  -e "s/DB3_NODE/${DB3_NODE}/g" \
+  .circleci/cluster/manager2_config.yaml > manager2_config.yaml
+
+openssl rsa -aes256 -passout pass:secret_ca_password -in ca.key -out ca.encrypted.key
+
+docker run \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:ro --tmpfs /run --tmpfs /run/lock -d \
+  --name ${MANAGER2_NAME} \
+  --network net1 --ip ${MANAGER2_IP} \
+  -v $(pwd)/manager2_config.yaml:/etc/cloudify/config.yaml \
+  -v $(pwd)/ca.crt:/etc/cloudify/ca.pem \
+  -v $(pwd)/ca.encrypted.key:/etc/cloudify/ca_key.pem \
+  -v $(pwd)/external_cert_2.pem:/etc/cloudify/external_cert.pem \
+  -v $(pwd)/external_key_2.pem:/etc/cloudify/external_key.pem \
+  -v $(pwd)/db_client_2_key.pem:/etc/cloudify/postgres_client_key.pem \
+  -v $(pwd)/db_client_2_cert.pem:/etc/cloudify/postgres_client_cert.pem \
+  cloudifyplatform/premium-cloudify-manager-worker
+docker exec ${MANAGER2_NAME} cfy_manager install
